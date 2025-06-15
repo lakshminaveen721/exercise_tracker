@@ -23,14 +23,17 @@ app.post('/api/users', (req, res) => {
   const username = req.body.username;
   db.run("INSERT INTO users (username) VALUES (?)", [username], function (err) {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ username, _id: this.lastID });
+    res.json({ username, _id: String(this.lastID) });
   });
 });
 
 app.get('/api/users', (req, res) => {
-  db.all("SELECT id AS _id, username FROM users", [], (err, rows) => {
+  db.all("SELECT username, id AS _id FROM users", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    res.json(rows.map(user => ({
+      username: user.username,
+      _id: String(user._id)
+    })));
   });
 });
 
@@ -49,7 +52,7 @@ app.post('/api/users/:_id/exercises', (req, res) => {
       function (err) {
         if (err) return res.status(500).json({ error: err.message });
         res.json({
-          _id: userId,
+          _id: String(userId),
           username: user.username,
           date: dateString,
           duration: parseInt(duration),
@@ -91,7 +94,7 @@ app.get('/api/users/:_id/logs', (req, res) => {
       res.json({
         username: user.username,
         count: exercises.length,
-        _id: userId,
+        _id: String(userId),
         log: exercises.map(e => ({
           description: e.description,
           duration: e.duration,
