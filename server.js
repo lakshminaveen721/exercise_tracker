@@ -1,181 +1,111 @@
 const express = require('express');
-const app = express();
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const db = require('./db'); // Your SQLite database connection
-const { v4: uuidv4 } = require('uuid'); // For generating unique IDs
-require('dotenv').config();
+const sqlite3 = require('sqlite3').verbose();
 
-// Middleware
+const app = express();
+const db = new sqlite3.Database('./exercise.db');
+
 app.use(cors());
-app.use(express.static('public'));
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(express.static('public'));
 
-// Serve the index.html file
+db.serialize(() => {
+  db.run("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL)");
+  db.run("CREATE TABLE IF NOT EXISTS exercises (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, description TEXT, duration INTEGER, date TEXT)");
+});
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html');
 });
 
-// --- API Routes ---
-
-// 1. Create a new user
-// POST /api/users with form data username
 app.post('/api/users', (req, res) => {
-  const { username } = req.body;
-  if (!username) {
-    return res.json({ error: 'Username is required' });
-  }
-
-  const _id = uuidv4(); // Generate a unique ID for the new user
-
-  db.run('INSERT INTO users (_id, username) VALUES (?, ?)', [_id, username], function(err) {
-    if (err) {
-      if (err.message.includes('UNIQUE constraint failed: users.username')) {
-        return res.json({ error: 'Username already exists' });
-      }
-      console.error('Error inserting user:', err.message);
-      return res.json({ error: 'Error creating user' });
-    }
-    res.json({ username, _id });
+  const username = req.body.username;
+  db.run("INSERT INTO users (username) VALUES (?)", [username], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ username: String(username), _id: String(this.lastID) });
   });
 });
 
-// 2. Get a list of all users
-// GET /api/users
 app.get('/api/users', (req, res) => {
-  db.all('SELECT _id, username FROM users', [], (err, rows) => {
-    if (err) {
-      console.error('Error fetching users:', err.message);
-      return res.json({ error: 'Error fetching users' });
-    }
-    res.json(rows);
+  db.all("SELECT username, id AS _id FROM users", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows.map(user => ({
+      username: String(user.username),
+      _id: String(user._id)
+    })));
   });
 });
 
-// 3. Add an exercise for a user
-// POST /api/users/:_id/exercises with form data description, duration, and optionally date
 app.post('/api/users/:_id/exercises', (req, res) => {
   const userId = req.params._id;
   const { description, duration, date } = req.body;
+  const entryDate = date ? new Date(date) : new Date();
+  const dateString = entryDate.toDateString();
 
-  if (!description || !duration) {
-    return res.json({ error: 'Description and duration are required' });
-  }
+  db.get("SELECT username FROM users WHERE id = ?", [userId], (err, user) => {
+    if (err || !user) return res.status(404).json({ error: 'User not found' });
 
-  const parsedDuration = parseInt(duration);
-  if (isNaN(parsedDuration)) {
-    return res.json({ error: 'Duration must be a number' });
-  }
-
-  const exerciseId = uuidv4();
-  const exerciseDate = date ? new Date(date) : new Date();
-  const formattedDate = exerciseDate.toDateString(); // "Mon Jan 01 1990" format
-
-  // First, check if the user exists
-  db.get('SELECT _id, username FROM users WHERE _id = ?', [userId], (err, user) => {
-    if (err) {
-      console.error('Error checking user existence:', err.message);
-      return res.json({ error: 'Database error' });
-    }
-    if (!user) {
-      return res.json({ error: 'User not found' });
-    }
-
-    // Insert the exercise
     db.run(
-      'INSERT INTO exercises (_id, userId, description, duration, date) VALUES (?, ?, ?, ?, ?)',
-      [exerciseId, userId, description, parsedDuration, formattedDate],
-      function(err) {
-        if (err) {
-          console.error('Error inserting exercise:', err.message);
-          return res.json({ error: 'Error adding exercise' });
-        }
-        res.json({
-          _id: user._id,
-          username: user.username,
-          date: formattedDate,
-          duration: parsedDuration,
-          description: description
+      "INSERT INTO exercises (user_id, description, duration, date) VALUES (?, ?, ?, ?)",
+      [userId, description, parseInt(duration), dateString],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.send({
+          username: String(user.username),
+          description: String(description),
+          duration: parseInt(duration),
+          date: String(dateString),
+          _id: String(userId)
         });
       }
     );
   });
 });
 
-// 4. Retrieve a full exercise log for a user
-// GET /api/users/:_id/logs with optional from, to, and limit parameters
 app.get('/api/users/:_id/logs', (req, res) => {
   const userId = req.params._id;
   const { from, to, limit } = req.query;
 
-  // Check if the user exists first
-  db.get('SELECT _id, username FROM users WHERE _id = ?', [userId], (err, user) => {
-    if (err) {
-      console.error('Error checking user existence for logs:', err.message);
-      return res.json({ error: 'Database error' });
-    }
-    if (!user) {
-      return res.json({ error: 'User not found' });
-    }
+  db.get("SELECT username FROM users WHERE id = ?", [userId], (err, user) => {
+    if (err || !user) return res.status(404).json({ error: 'User not found' });
 
-    let query = 'SELECT description, duration, date FROM exercises WHERE userId = ?';
+    let query = "SELECT description, duration, date FROM exercises WHERE user_id = ?";
     const params = [userId];
 
-    // Build date range filter
     if (from) {
-      const fromDate = new Date(from);
-      if (isNaN(fromDate)) {
-          return res.json({ error: "Invalid 'from' date format. Use yyyy-mm-dd." });
-      }
-      query += ' AND date >= ?';
-      // SQLite date comparison works better with ISO strings or consistent date strings
-      // We're storing toDateString, so comparing strings lexicographically here.
-      // For more robust date range querying, consider storing dates as YYYY-MM-DD or timestamps.
-      params.push(fromDate.toDateString()); 
-    }
-    if (to) {
-      const toDate = new Date(to);
-      if (isNaN(toDate)) {
-          return res.json({ error: "Invalid 'to' date format. Use yyyy-mm-dd." });
-      }
-      query += ' AND date <= ?';
-      params.push(toDate.toDateString());
+      query += " AND date >= ?";
+      params.push(new Date(from).toDateString());
     }
 
-    // Add limit
+    if (to) {
+      query += " AND date <= ?";
+      params.push(new Date(to).toDateString());
+    }
+
+    query += " ORDER BY date ASC";
     if (limit) {
-      const parsedLimit = parseInt(limit);
-      if (isNaN(parsedLimit) || parsedLimit <= 0) {
-        return res.json({ error: 'Limit must be a positive integer' });
-      }
-      query += ' LIMIT ?';
-      params.push(parsedLimit);
+      query += " LIMIT ?";
+      params.push(parseInt(limit));
     }
 
     db.all(query, params, (err, exercises) => {
-      if (err) {
-        console.error('Error fetching exercise log:', err.message);
-        return res.json({ error: 'Error fetching exercise log' });
-      }
-
-      const log = exercises.map(ex => ({
-        description: ex.description,
-        duration: ex.duration,
-        date: ex.date // Date is already in "Mon Jan 01 1990" format from storage
-      }));
-
-      res.json({
-        _id: user._id,
-        username: user.username,
-        count: log.length,
-        log: log
+      if (err) return res.status(500).json({ error: err.message });
+      res.send({
+        username: String(user.username),
+        count: exercises.length,
+        _id: String(userId),
+        log: exercises.map(e => ({
+          description: String(e.description),
+          duration: parseInt(e.duration),
+          date: String(e.date)
+        }))
       });
     });
   });
 });
 
-// Start the server
-const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log('Your app is listening on port ' + listener.address().port);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log('Server running at http://localhost:' + PORT);
 });

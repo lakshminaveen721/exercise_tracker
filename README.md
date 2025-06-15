@@ -1,3 +1,17 @@
-# Exercise Tracker
+# Exercise Tracker Microservice (SQLite)
 
-This is the boilerplate for the Exercise Tracker project. Instructions for building your project can be found at https://www.freecodecamp.org/learn/apis-and-microservices/apis-and-microservices-projects/exercise-tracker
+## Endpoints
+
+- `POST /api/users` → Create user
+- `GET /api/users` → Get all users
+- `POST /api/users/:_id/exercises` → Add exercise
+- `GET /api/users/:_id/logs?from=&to=&limit=` → Get logs
+
+## Setup
+
+```bash
+npm install
+npm start
+```
+
+Database will be created as `exercise.db`.
